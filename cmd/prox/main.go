@@ -1,7 +1,15 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"localprox/internal/pkg/server"
+	"os"
+)
 
 func main() {
-	fmt.Println("Hello world")
+	err := server.Serve()
+	if err != nil {
+		fmt.Println("Error : ", err)
+		os.Exit(1)
+	}
 }
