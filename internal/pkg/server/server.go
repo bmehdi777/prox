@@ -2,17 +2,22 @@ package server
 
 import (
 	"fmt"
+	"localprox/internal/pkg/config"
 	"net/http"
 	"time"
 )
 
 func Serve() error {
+	config.InitConfig()
+
 	mux := http.NewServeMux()
 
-	mux.Handle("GET /", MiddlewareDelay(2 * time.Second, http.HandlerFunc(test)))
+	m := Middleware{}
+
+	mux.Handle("GET /", m.Log(m.Delay(2*time.Second, m.Redirect(http.HandlerFunc(ok)))))
 
 	server := http.Server{
-		Addr:    fmt.Sprintf("%v:%v", "localhost", "3000"),
+		Addr:    fmt.Sprintf("%v:%v", config.GlobalConfiguration.ProxyAddr, config.GlobalConfiguration.ProxyPort),
 		Handler: mux,
 	}
 
@@ -20,9 +25,6 @@ func Serve() error {
 	return err
 }
 
-func test(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Intercept request from : ", r.Host)
-	fmt.Println("Redirecting to localhost:5000")
-
+func ok(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
