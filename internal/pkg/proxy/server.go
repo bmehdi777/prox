@@ -1,4 +1,4 @@
-package server
+package proxy
 
 import (
 	"fmt"
@@ -8,7 +8,6 @@ import (
 )
 
 func Serve() error {
-	config.InitConfig()
 
 	mux := http.NewServeMux()
 
@@ -17,7 +16,7 @@ func Serve() error {
 	mux.Handle("GET /", m.Log(m.Delay(2*time.Second, m.Redirect(http.HandlerFunc(ok)))))
 
 	server := http.Server{
-		Addr:    fmt.Sprintf("%v:%v", config.GlobalConfiguration.ProxyAddr, config.GlobalConfiguration.ProxyPort),
+		Addr:    fmt.Sprintf("%v:%v", config.GlobalConfiguration.Proxy.Addr, config.GlobalConfiguration.Proxy.Port),
 		Handler: mux,
 	}
 

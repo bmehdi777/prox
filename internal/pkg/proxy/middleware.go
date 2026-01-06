@@ -1,10 +1,11 @@
-package server
+package proxy
 
 import (
 	"fmt"
 	"io"
 	"localprox/internal/pkg/config"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -25,6 +26,8 @@ func (m *Middleware) Redirect(next http.Handler) http.Handler {
 		response, err := m.redirectRequest(r)
 		if err != nil {
 			fmt.Println("Error while redirecting request : ", err)
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		for key, values := range response.Header {
@@ -53,8 +56,18 @@ func (m *Middleware) Log(next http.Handler) http.Handler {
 	})
 }
 
+func (m *Middleware) ReplaceBody(newBody string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = io.NopCloser(strings.NewReader(newBody))
+		r.ContentLength = int64(len(newBody))
+
+		next.ServeHTTP(w,r)
+	})
+}
+
+
 func (m *Middleware) redirectRequest(r *http.Request) (*http.Response, error) {
-	targetUrl := fmt.Sprintf("http://%v:%v", config.GlobalConfiguration.TargetAddr, config.GlobalConfiguration.TargetPort)
+	targetUrl := fmt.Sprintf("http://%v:%v", config.GlobalConfiguration.Target.Addr, config.GlobalConfiguration.Target.Port)
 	request, err := http.NewRequest(r.Method, targetUrl, r.Body)
 	if err != nil {
 		return nil, err
@@ -62,7 +75,7 @@ func (m *Middleware) redirectRequest(r *http.Request) (*http.Response, error) {
 
 	request.Header = r.Header.Clone()
 	// Not sure for this one but lets try it
-	request.Host = fmt.Sprintf("http://%v:%v", config.GlobalConfiguration.ProxyAddr, config.GlobalConfiguration.ProxyPort)
+	request.Host = fmt.Sprintf("http://%v:%v", config.GlobalConfiguration.Proxy.Addr, config.GlobalConfiguration.Proxy.Port)
 	request.Header.Add("X-Forwarded-For", r.RemoteAddr)
 
 	request.Header.Del("Connection")

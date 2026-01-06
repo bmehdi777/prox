@@ -1,27 +1,50 @@
 package config
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/spf13/viper"
 )
 
+type ClientConfig struct {
+	Enabled bool `json:"enabled"`
+	Addr string `json:"addr"`
+	Port string `json:"port"`
+}
+
+type TargetConfig struct {
+	Addr string `json:"addr"`
+	Port string `json:"port"`
+}
+
+type ProxyConfig struct {
+	Addr string `json:"addr"`
+	Port string `json:"port"`
+}
+
 type Config struct {
-	ProxyAddr string `json:"proxy_addr"`
-	ProxyPort string `json:"proxy_port"`
-	TargetAddr string `json:"target_addr"`
-	TargetPort string `json:"target_port"`
+	Proxy ProxyConfig `json:"proxy"`
+	Target TargetConfig `json:"target"`
+	Client ClientConfig `json:"client"`
 }
 
 var GlobalConfiguration Config
 
 func InitConfig() {
 	GlobalConfiguration = Config {
-		ProxyAddr:"0.0.0.0",
-		ProxyPort:"3000",
-		TargetAddr:"localhost",
-		TargetPort:"3030",
+		Proxy: ProxyConfig{
+			Addr:"0.0.0.0",
+			Port:"3000",
+		},
+		Target: TargetConfig{
+			Addr:"localhost",
+			Port:"3030",
+		},
+		Client: ClientConfig{
+			Enabled: true,
+			Addr:"localhost",
+			Port:"9090",
+		},
 	}
 
 	viper.SetConfigName("config")
@@ -33,19 +56,5 @@ func InitConfig() {
 	err := viper.Unmarshal(&GlobalConfiguration)
 	if err != nil {
 		log.Fatalf("Unable to unmarshal config file : %v", err)
-	}
-
-	fmt.Println("Conf: ", GlobalConfiguration.TargetAddr)
-
-	verify()
-}
-
-func verify() {
-	if GlobalConfiguration.TargetAddr == ""{
-		log.Fatal("`TargetAddr` must be completed.")
-	}
-
-	if GlobalConfiguration.TargetPort == ""{
-		log.Fatal("`TargetPort` must be completed.")
 	}
 }
