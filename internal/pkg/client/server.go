@@ -22,6 +22,7 @@ func Serve() error {
 		httpHandleAssets(w, r, assets, "/")
 	})
 
+	fmt.Printf("Starting client server on http://%v:%v\n", config.GlobalConfiguration.Client.Addr, config.GlobalConfiguration.Client.Port)
 	err = http.ListenAndServe(fmt.Sprintf("%v:%v", config.GlobalConfiguration.Client.Addr, config.GlobalConfiguration.Client.Port), mux)
 	if err != nil {
 		return err

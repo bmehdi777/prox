@@ -23,7 +23,7 @@ func main() {
 
 	err := proxy.Serve()
 	if err != nil {
-		fmt.Println("Error : ", err)
+		fmt.Println("Proxy error : ", err)
 		os.Exit(1)
 	}
 }

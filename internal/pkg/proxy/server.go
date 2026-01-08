@@ -8,7 +8,6 @@ import (
 )
 
 func Serve() error {
-
 	mux := http.NewServeMux()
 
 	m := Middleware{}
@@ -20,6 +19,8 @@ func Serve() error {
 		Handler: mux,
 	}
 
+
+	fmt.Printf("Starting proxy server on http://%v:%v\n", config.GlobalConfiguration.Proxy.Addr, config.GlobalConfiguration.Proxy.Port)
 	err := server.ListenAndServe()
 	return err
 }
