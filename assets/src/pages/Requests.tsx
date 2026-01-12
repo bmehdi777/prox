@@ -12,8 +12,56 @@ const requests = [
   },
 ];
 
+const columns = [
+  {
+    header: "Method",
+    cell: ({ row }) => {
+      return <div>{row.original.method}</div>;
+    },
+  },
+  {
+    header: "Url",
+    cell: ({ row }) => <div>{row.original.url}</div>,
+  },
+  {
+    header: "Status",
+    cell: ({ row }) => <div>{row.original.status}</div>,
+  },
+  {
+    header: "Duration",
+    cell: ({ row }) => <div>{row.original.duration}</div>,
+  },
+];
+
 function Requests() {
   const [activeRequestId, setActiveRequestId] = useState<number | null>(null);
+	
+	// todo
+
+  // const table = useReactTable({
+  //   data,
+  //   columns,
+  //   state: {
+  //     sorting,
+  //     columnVisibility,
+  //     rowSelection,
+  //     columnFilters,
+  //     pagination,
+  //   },
+  //   getRowId: (row) => row.id.toString(),
+  //   enableRowSelection: true,
+  //   onRowSelectionChange: setRowSelection,
+  //   onSortingChange: setSorting,
+  //   onColumnFiltersChange: setColumnFilters,
+  //   onColumnVisibilityChange: setColumnVisibility,
+  //   onPaginationChange: setPagination,
+  //   getCoreRowModel: getCoreRowModel(),
+  //   getFilteredRowModel: getFilteredRowModel(),
+  //   getPaginationRowModel: getPaginationRowModel(),
+  //   getSortedRowModel: getSortedRowModel(),
+  //   getFacetedRowModel: getFacetedRowModel(),
+  //   getFacetedUniqueValues: getFacetedUniqueValues(),
+  // });
 
   return (
     <div className="flex">
