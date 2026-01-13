@@ -10,12 +10,12 @@ export const menu = [
         url: "/requests",
       },
       {
-        title: "Scripts",
-        url: "/scripts", // will be able to use lua to play with request
-      },
-      {
         title: "Logs",
         url: "/logs",
+      },
+      {
+        title: "Scripts",
+        url: "/scripts", // will be able to use lua to play with request
       },
     ],
   },

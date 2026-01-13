@@ -1,8 +1,10 @@
 import * as React from "react";
 import { Link, useLocation } from "react-router";
+import { Kbd } from "src/components/ui/kbd";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -41,6 +43,15 @@ function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           </SidebarGroup>
         ))}
       </SidebarContent>
+      <SidebarFooter>
+        <div className="flex items-center justify-between px-2 py-2 text-sm text-muted-foreground">
+          <span>Search</span>
+          <div className="flex items-center gap-1">
+            <Kbd>Ctrl</Kbd>
+            <Kbd>K</Kbd>
+          </div>
+        </div>
+      </SidebarFooter>
       <SidebarRail />
     </Sidebar>
   );
