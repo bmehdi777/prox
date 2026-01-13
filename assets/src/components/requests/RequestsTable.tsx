@@ -126,7 +126,7 @@ function RequestsTable({
                 <TableCell>
                   <Switch
                     checked={isCached}
-                    onCheckedChange={(e) => {
+                    onCheckedChange={(_) => {
                       onToggleCache(request.id);
                     }}
                     onClick={(e) => e.stopPropagation()}
