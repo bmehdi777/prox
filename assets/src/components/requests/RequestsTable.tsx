@@ -35,121 +35,130 @@ function RequestsTable({
   onToggleCache,
 }: RequestsTableProps) {
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead
-            className="w-[60px] cursor-pointer select-none"
-            onClick={() => onSort("cached")}
-          >
-            <div className="flex items-center">
-              <Archive className="h-4 w-4" />
-              <SortIcon
-                field="cached"
-                currentSortField={sortField}
-                sortDirection={sortDirection}
-              />
-            </div>
-          </TableHead>
-          <TableHead
-            className="w-[100px] cursor-pointer select-none"
-            onClick={() => onSort("method")}
-          >
-            <div className="flex items-center">
-              Method
-              <SortIcon
-                field="method"
-                currentSortField={sortField}
-                sortDirection={sortDirection}
-              />
-            </div>
-          </TableHead>
-          <TableHead
-            className="cursor-pointer select-none"
-            onClick={() => onSort("url")}
-          >
-            <div className="flex items-center">
-              URL
-              <SortIcon
-                field="url"
-                currentSortField={sortField}
-                sortDirection={sortDirection}
-              />
-            </div>
-          </TableHead>
-          <TableHead
-            className="w-[100px] cursor-pointer select-none"
-            onClick={() => onSort("status")}
-          >
-            <div className="flex items-center">
-              Status
-              <SortIcon
-                field="status"
-                currentSortField={sortField}
-                sortDirection={sortDirection}
-              />
-            </div>
-          </TableHead>
-          <TableHead
-            className="w-[100px] cursor-pointer select-none"
-            onClick={() => onSort("duration")}
-          >
-            <div className="flex items-center justify-end">
-              Duration
-              <SortIcon
-                field="duration"
-                currentSortField={sortField}
-                sortDirection={sortDirection}
-              />
-            </div>
-          </TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {requests.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-              No requests match the current filters
-            </TableCell>
-          </TableRow>
-        ) : (
-          requests.map((request) => {
-            const isCached = cachedRequestIds.has(request.id);
-            return (
-              <TableRow
-                key={request.id}
-                onClick={() => onSelectRequest(request.id)}
-                className={`cursor-pointer ${
-                  selectedRequestId === request.id ? "bg-muted" : ""
-                }`}
+    <div className="flex flex-col h-full">
+      <div className="shrink-0">
+        <table className="w-full text-sm">
+          <TableHeader>
+            <TableRow>
+              <TableHead
+                className="w-[60px] cursor-pointer select-none"
+                onClick={() => onSort("cached")}
               >
-                <TableCell>
-                  <Switch
-                    checked={isCached}
-                    onCheckedChange={(_) => {
-                      onToggleCache(request.id);
-                    }}
-                    onClick={(e) => e.stopPropagation()}
+                <div className="flex items-center">
+                  <Archive className="h-4 w-4" />
+                  <SortIcon
+                    field="cached"
+                    currentSortField={sortField}
+                    sortDirection={sortDirection}
                   />
-                </TableCell>
-                <TableCell>
-                  <MethodBadge method={request.method} />
-                </TableCell>
-                <TableCell className="font-mono text-sm truncate max-w-[400px]">
-                  {request.url}
-                </TableCell>
-                <TableCell>
-                  <StatusBadge status={request.status} />
-                </TableCell>
-                <TableCell className="text-right text-muted-foreground">
-                  {request.duration}
+                </div>
+              </TableHead>
+              <TableHead
+                className="w-[100px] cursor-pointer select-none"
+                onClick={() => onSort("method")}
+              >
+                <div className="flex items-center">
+                  Method
+                  <SortIcon
+                    field="method"
+                    currentSortField={sortField}
+                    sortDirection={sortDirection}
+                  />
+                </div>
+              </TableHead>
+              <TableHead
+                className="cursor-pointer select-none"
+                onClick={() => onSort("url")}
+              >
+                <div className="flex items-center">
+                  URL
+                  <SortIcon
+                    field="url"
+                    currentSortField={sortField}
+                    sortDirection={sortDirection}
+                  />
+                </div>
+              </TableHead>
+              <TableHead
+                className="w-[100px] cursor-pointer select-none"
+                onClick={() => onSort("status")}
+              >
+                <div className="flex items-center">
+                  Status
+                  <SortIcon
+                    field="status"
+                    currentSortField={sortField}
+                    sortDirection={sortDirection}
+                  />
+                </div>
+              </TableHead>
+              <TableHead
+                className="w-[100px] cursor-pointer select-none"
+                onClick={() => onSort("duration")}
+              >
+                <div className="flex items-center justify-end">
+                  Duration
+                  <SortIcon
+                    field="duration"
+                    currentSortField={sortField}
+                    sortDirection={sortDirection}
+                  />
+                </div>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+        </table>
+      </div>
+
+      <div className="flex-1 overflow-auto min-h-0">
+        <Table>
+          <TableBody>
+            {requests.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                  No requests match the current filters
                 </TableCell>
               </TableRow>
-            );
-          })
-        )}
-      </TableBody>
-    </Table>
+            ) : (
+              requests.map((request) => {
+                const isCached = cachedRequestIds.has(request.id);
+                return (
+                  <TableRow
+                    key={request.id}
+                    onClick={() => onSelectRequest(request.id)}
+                    className={`cursor-pointer ${
+                      selectedRequestId === request.id ? "bg-muted" : ""
+                    }`}
+                  >
+                    <TableCell className="w-[60px]">
+                      <Switch
+                        checked={isCached}
+                        onCheckedChange={(_) => {
+                          onToggleCache(request.id);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </TableCell>
+                    <TableCell className="w-[100px]">
+                      <MethodBadge method={request.method} />
+                    </TableCell>
+                    <TableCell className="font-mono text-sm truncate max-w-[400px]">
+                      {request.url}
+                    </TableCell>
+                    <TableCell className="w-[100px]">
+                      <StatusBadge status={request.status} />
+                    </TableCell>
+                    <TableCell className="w-[100px] text-right text-muted-foreground">
+                      {request.duration}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
   );
 }
 

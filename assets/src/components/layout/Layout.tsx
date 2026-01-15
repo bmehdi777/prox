@@ -8,12 +8,14 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "src/components/ui/sidebar";
+import { Toaster } from "src/components/ui/sonner";
 
 function Layout() {
   return (
     <SidebarProvider>
       <AppSidebar />
       <CommandPalette />
+      <Toaster />
       <SidebarInset>
         <header className="flex h-12 shrink-0 items-center gap-2 px-4">
           <SidebarTrigger className="-ml-1" />

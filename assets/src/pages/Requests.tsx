@@ -113,8 +113,8 @@ function Requests() {
   };
 
   return (
-    <div className="flex h-full">
-      <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
+      <div className="flex-1 flex flex-col min-h-0">
         <RequestFilters
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -131,7 +131,7 @@ function Requests() {
           onTogglePause={() => setIsPaused(!isPaused)}
         />
 
-        <div className="flex-1 overflow-auto p-4">
+        <div className="flex-1 p-4 min-h-0">
           <RequestsTable
             requests={filteredAndSortedRequests}
             selectedRequestId={selectedRequestId}
@@ -146,7 +146,7 @@ function Requests() {
       </div>
 
       {selectedRequest && (
-        <div className="flex-1 p-4 border-l overflow-auto">
+        <div className="flex-1 p-4 border-l overflow-auto min-h-0">
           <RequestDetail
             request={selectedRequest}
             onClose={() => setSelectedRequestId(null)}
