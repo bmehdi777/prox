@@ -7,12 +7,20 @@ import (
 	"time"
 )
 
+type RequestResponse struct {
+	Req *http.Request
+	Res *http.Response
+}
+
+var RequestResponseList []RequestResponse
+
 func Serve() error {
 	mux := http.NewServeMux()
 
 	m := Middleware{}
+	RequestResponseList = make([]RequestResponse, 0)
 
-	mux.Handle("GET /", m.Log(m.Delay(2*time.Second, m.Redirect(http.HandlerFunc(ok)))))
+	mux.Handle("/", m.Log(m.Delay(2*time.Second, m.Redirect(http.HandlerFunc(ok)))))
 
 	server := http.Server{
 		Addr:    fmt.Sprintf("%v:%v", config.GlobalConfiguration.Proxy.Addr, config.GlobalConfiguration.Proxy.Port),

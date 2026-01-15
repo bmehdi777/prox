@@ -9,7 +9,6 @@ interface ScriptFileBrowserProps {
   onSelectFile: (id: string) => void;
   onNewFile: () => void;
   onDeleteFile: (id: string) => void;
-  onRenameFile: (id: string) => void;
 }
 
 function ScriptFileBrowser({
@@ -18,7 +17,6 @@ function ScriptFileBrowser({
   onSelectFile,
   onNewFile,
   onDeleteFile,
-  onRenameFile,
 }: ScriptFileBrowserProps) {
   return (
     <div className="flex flex-col h-full w-64 border-l bg-background">
@@ -46,9 +44,7 @@ function ScriptFileBrowser({
                 key={file.id}
                 onClick={() => onSelectFile(file.id)}
                 className={`flex items-center justify-between gap-2 px-2 py-1.5 rounded-md cursor-pointer group ${
-                  selectedFileId === file.id
-                    ? "bg-muted"
-                    : "hover:bg-muted/50"
+                  selectedFileId === file.id ? "bg-muted" : "hover:bg-muted/50"
                 }`}
               >
                 <div className="flex items-center gap-2 min-w-0">
@@ -61,7 +57,6 @@ function ScriptFileBrowser({
                     size="icon-sm"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onRenameFile(file.id);
                     }}
                     className="cursor-pointer h-6 w-6"
                   >

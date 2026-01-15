@@ -44,12 +44,18 @@ func (m *Middleware) RedirectTarget(next http.Handler) http.Handler {
 
 func (m *Middleware) Redirect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		response, err := m.redirectRequest(r);
+		newReqRes := RequestResponse{
+			Req: r,
+		}
+		response, err := m.redirectRequest(r)
 		if err != nil {
 			fmt.Println("Error while redirecting request : ", err)
+			RequestResponseList = append(RequestResponseList, newReqRes)
 			next.ServeHTTP(w, r)
 			return
 		}
+		newReqRes.Res = response
+		RequestResponseList = append(RequestResponseList, newReqRes)
 
 		for key, values := range response.Header {
 			w.Header()[key] = values
@@ -82,10 +88,9 @@ func (m *Middleware) ReplaceBody(newBody string, next http.Handler) http.Handler
 		r.Body = io.NopCloser(strings.NewReader(newBody))
 		r.ContentLength = int64(len(newBody))
 
-		next.ServeHTTP(w,r)
+		next.ServeHTTP(w, r)
 	})
 }
-
 
 func (m *Middleware) redirectRequest(r *http.Request) (*http.Response, error) {
 	request, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
