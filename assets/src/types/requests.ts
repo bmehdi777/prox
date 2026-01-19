@@ -1,11 +1,19 @@
 export type HttpVerb = "GET" | "POST" | "PATCH" | "PUT" | "DELETE" | "HEAD" | "CONNECT" | "OPTIONS" | "TRACE";
 
+export interface RequestHeaders {
+  [key: string]: string;
+}
+
 export interface Request {
   id: number;
   method: HttpVerb;
   url: string;
   status: number;
   duration: string;
+  requestHeaders: RequestHeaders;
+  responseHeaders: RequestHeaders;
+  requestBody?: string;
+  responseBody?: string;
 }
 
 export type SortField = "method" | "url" | "status" | "duration" | "cached";

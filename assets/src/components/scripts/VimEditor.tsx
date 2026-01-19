@@ -1,13 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "src/components/ui/badge";
 import { Input } from "src/components/ui/input";
+import { tokenizeLua, getTokenClass, type Token } from "src/lib/lua-highlighter";
 
 type VimMode = "normal" | "insert" | "visual" | "visual-line" | "visual-block" | "replace";
 
 interface VimEditorProps {
   value: string;
   onChange: (value: string) => void;
+  onSave?: () => void;
   placeholder?: string;
+}
+
+interface HistoryEntry {
+  content: string;
+  cursorPos: number;
+}
+
+interface CommandState {
+  isActive: boolean;
+  input: string;
 }
 
 interface SearchState {
@@ -27,7 +39,7 @@ interface TextObject {
   end: number;
 }
 
-function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
+function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
   const [mode, setMode] = useState<VimMode>("normal");
   const [cursorPos, setCursorPos] = useState(0);
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
@@ -43,11 +55,20 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
     matches: [],
     currentMatchIndex: -1,
   });
+  const [command, setCommand] = useState<CommandState>({
+    isActive: false,
+    input: "",
+  });
   const [statusMessage, setStatusMessage] = useState("");
   const [register, setRegister] = useState("");
 
+  // Undo/redo history
+  const [history, setHistory] = useState<HistoryEntry[]>([{ content: value, cursorPos: 0 }]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const commandInputRef = useRef<HTMLInputElement>(null);
 
   const lines = value.split("\n");
 
@@ -500,6 +521,61 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
     return depth === 0 ? pos : cursorPos;
   }, [cursorPos, value]);
 
+  // Get word under cursor for * and # commands
+  const getWordUnderCursor = useCallback((): string => {
+    if (!value[cursorPos] || !isWordChar(value[cursorPos])) return "";
+
+    let start = cursorPos;
+    let end = cursorPos;
+
+    while (start > 0 && isWordChar(value[start - 1])) start--;
+    while (end < value.length - 1 && isWordChar(value[end + 1])) end++;
+
+    return value.slice(start, end + 1);
+  }, [cursorPos, value]);
+
+  // Search for word under cursor
+  const searchWordUnderCursor = useCallback((forward: boolean) => {
+    const word = getWordUnderCursor();
+    if (!word) {
+      setStatusMessage("No word under cursor");
+      return;
+    }
+
+    const pattern = `\\b${word}\\b`;
+    try {
+      const regex = new RegExp(pattern, "g");
+      const matches: { start: number; end: number }[] = [];
+      let match;
+      while ((match = regex.exec(value)) !== null) {
+        matches.push({ start: match.index, end: match.index + match[0].length });
+      }
+
+      if (matches.length === 0) {
+        setStatusMessage("Pattern not found");
+        return;
+      }
+
+      setSearch((prev) => ({ ...prev, pattern, matches }));
+
+      // Find next/previous match from cursor position
+      if (forward) {
+        const nextMatch = matches.find((m) => m.start > cursorPos) || matches[0];
+        const idx = matches.indexOf(nextMatch);
+        setSearch((prev) => ({ ...prev, currentMatchIndex: idx }));
+        setCursorPos(nextMatch.start);
+      } else {
+        const prevMatch = [...matches].reverse().find((m) => m.start < cursorPos) || matches[matches.length - 1];
+        const idx = matches.indexOf(prevMatch);
+        setSearch((prev) => ({ ...prev, currentMatchIndex: idx }));
+        setCursorPos(prevMatch.start);
+      }
+      setStatusMessage(`/${pattern} (${matches.length} matches)`);
+    } catch {
+      setStatusMessage("Invalid pattern");
+    }
+  }, [cursorPos, getWordUnderCursor, value]);
+
   // ============ Get motion target position ============
   const getMotionTarget = useCallback((motion: string, count: number = 1): number => {
     const currentLine = getCursorLine();
@@ -545,6 +621,7 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
     else if (direction === "ctrl-b") newPos = getPositionFromLineCol(Math.max(getCursorLine() - 30, 0), getCursorColumn());
     else if (direction === "+") newPos = getFirstNonWhitespace(Math.min(getCursorLine() + count, lines.length - 1));
     else if (direction === "-") newPos = getFirstNonWhitespace(Math.max(getCursorLine() - count, 0));
+    else if (direction === "_") newPos = getFirstNonWhitespace(Math.min(getCursorLine() + count - 1, lines.length - 1));
     else if (direction === "|") newPos = getLineStart(getCursorLine()) + Math.min(count - 1, (lines[getCursorLine()]?.length ?? 1) - 1);
 
     newPos = Math.max(0, Math.min(newPos, Math.max(0, value.length - 1)));
@@ -556,17 +633,63 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
     return newPos;
   }, [getMotionTarget, getPositionFromLineCol, getCursorLine, getCursorColumn, lines, getFirstNonWhitespace, getLineStart, mode, value.length]);
 
+  // ============ History (Undo/Redo) ============
+  const pushHistory = useCallback((content: string, cursor: number) => {
+    setHistory((prev) => {
+      // Remove any future history if we're not at the end
+      const newHistory = prev.slice(0, historyIndex + 1);
+      // Don't push if content is the same as current
+      if (newHistory[newHistory.length - 1]?.content === content) {
+        return newHistory;
+      }
+      return [...newHistory, { content, cursorPos: cursor }];
+    });
+    setHistoryIndex((prev) => prev + 1);
+  }, [historyIndex]);
+
+  const undo = useCallback(() => {
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1;
+      const entry = history[newIndex];
+      setHistoryIndex(newIndex);
+      onChange(entry.content);
+      setCursorPos(Math.min(entry.cursorPos, Math.max(0, entry.content.length - 1)));
+      setStatusMessage(`Undo: ${historyIndex} changes left`);
+    } else {
+      setStatusMessage("Already at oldest change");
+    }
+  }, [history, historyIndex, onChange]);
+
+  const redo = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+      const newIndex = historyIndex + 1;
+      const entry = history[newIndex];
+      setHistoryIndex(newIndex);
+      onChange(entry.content);
+      setCursorPos(Math.min(entry.cursorPos, Math.max(0, entry.content.length - 1)));
+      setStatusMessage(`Redo: ${history.length - newIndex - 1} changes ahead`);
+    } else {
+      setStatusMessage("Already at newest change");
+    }
+  }, [history, historyIndex, onChange]);
+
+  // ============ Core operations ============
   const deleteRange = useCallback((start: number, end: number, enterInsert: boolean = false) => {
     const deletedText = value.slice(start, end);
     setRegister(deletedText);
     const newValue = value.slice(0, start) + value.slice(end);
+    const newCursorPos = Math.min(start, Math.max(0, newValue.length - 1));
     onChange(newValue);
-    setCursorPos(Math.min(start, Math.max(0, newValue.length - 1)));
+    setCursorPos(newCursorPos);
+    if (!enterInsert) {
+      // Push history for delete operations that don't enter insert mode
+      pushHistory(newValue, newCursorPos);
+    }
     if (enterInsert) {
       setMode("insert");
     }
     return deletedText;
-  }, [value, onChange]);
+  }, [value, onChange, pushHistory]);
 
   const deleteLine = useCallback((count: number = 1, enterInsert: boolean = false) => {
     const currentLine = getCursorLine();
@@ -662,6 +785,120 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
     setCursorPos(search.matches[prevIndex].start);
   }, [search.matches, search.currentMatchIndex]);
 
+  // ============ Command Mode ============
+  const executeCommand = useCallback((cmd: string) => {
+    const trimmed = cmd.trim();
+
+    // :w - Save
+    if (trimmed === "w") {
+      if (onSave) {
+        onSave();
+        setStatusMessage("File saved");
+      } else {
+        setStatusMessage("No save handler");
+      }
+      return;
+    }
+
+    // :wq - Save and quit (just save, no quit in browser)
+    if (trimmed === "wq" || trimmed === "x") {
+      if (onSave) {
+        onSave();
+        setStatusMessage("File saved");
+      }
+      return;
+    }
+
+    // :q - Quit (no-op in browser)
+    if (trimmed === "q" || trimmed === "q!") {
+      setStatusMessage("Can't quit browser vim :)");
+      return;
+    }
+
+    // :123 - Go to line number
+    const lineMatch = trimmed.match(/^(\d+)$/);
+    if (lineMatch) {
+      const lineNum = Math.max(1, Math.min(parseInt(lineMatch[1]), lines.length));
+      setCursorPos(getLineStart(lineNum - 1));
+      setStatusMessage(`Line ${lineNum}`);
+      return;
+    }
+
+    // :$ - Go to last line
+    if (trimmed === "$") {
+      setCursorPos(getLineStart(lines.length - 1));
+      setStatusMessage(`Line ${lines.length}`);
+      return;
+    }
+
+    // :s/pattern/replacement/ or :s/pattern/replacement/g - Substitute on current line
+    // :%s/pattern/replacement/ or :%s/pattern/replacement/g - Substitute globally
+    const subMatch = trimmed.match(/^(%)?s\/(.+?)\/(.*)\/([gi]*)$/);
+    if (subMatch) {
+      const [, global, pattern, replacement, flags] = subMatch;
+      try {
+        const isGlobalFile = global === "%";
+        const isGlobalReplace = flags.includes("g");
+        const isCaseInsensitive = flags.includes("i");
+        const regex = new RegExp(pattern, isCaseInsensitive ? "gi" : "g");
+
+        if (isGlobalFile) {
+          // Replace in entire file
+          let newValue: string;
+          let count = 0;
+          if (isGlobalReplace) {
+            newValue = value.replace(regex, () => { count++; return replacement; });
+          } else {
+            // Replace first occurrence on each line
+            newValue = value.split("\n").map((line) => {
+              const newLine = line.replace(regex, () => { count++; return replacement; });
+              regex.lastIndex = 0;
+              return newLine;
+            }).join("\n");
+          }
+          if (count > 0) {
+            onChange(newValue);
+            pushHistory(newValue, cursorPos);
+            setStatusMessage(`${count} substitution(s)`);
+          } else {
+            setStatusMessage("Pattern not found");
+          }
+        } else {
+          // Replace on current line only
+          const currentLine = getCursorLine();
+          const lineStart = getLineStart(currentLine);
+          const lineEnd = getLineEnd(currentLine);
+          const lineContent = value.slice(lineStart, lineEnd);
+          let count = 0;
+          const newLine = isGlobalReplace
+            ? lineContent.replace(regex, () => { count++; return replacement; })
+            : lineContent.replace(new RegExp(pattern, isCaseInsensitive ? "i" : ""), () => { count++; return replacement; });
+
+          if (count > 0) {
+            const newValue = value.slice(0, lineStart) + newLine + value.slice(lineEnd);
+            onChange(newValue);
+            pushHistory(newValue, cursorPos);
+            setStatusMessage(`${count} substitution(s)`);
+          } else {
+            setStatusMessage("Pattern not found");
+          }
+        }
+      } catch {
+        setStatusMessage("Invalid pattern");
+      }
+      return;
+    }
+
+    // :noh - Clear search highlight
+    if (trimmed === "noh" || trimmed === "nohlsearch") {
+      setSearch((prev) => ({ ...prev, matches: [], currentMatchIndex: -1 }));
+      setStatusMessage("Search cleared");
+      return;
+    }
+
+    setStatusMessage(`Unknown command: ${trimmed}`);
+  }, [cursorPos, getCursorLine, getLineEnd, getLineStart, lines.length, onChange, onSave, pushHistory, value]);
+
   // ============ Mode transitions ============
   const enterInsertMode = useCallback((position: "before" | "after" | "lineStart" | "lineEnd" | "firstNonWhitespace") => {
     setMode("insert");
@@ -739,7 +976,7 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
         case "f": moveCursor("ctrl-f", count); break;
         case "b": moveCursor("ctrl-b", count); break;
         case "v": enterVisualMode("visual-block"); break;
-        case "r": /* redo - not implemented */ break;
+        case "r": redo(); break;
       }
       setCountBuffer("");
       setCommandBuffer("");
@@ -1008,9 +1245,15 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
         });
         break;
 
-      // Undo (simplified - just show message)
+      // Undo
       case "u":
-        setStatusMessage("Undo not available");
+        undo();
+        break;
+
+      // Command mode
+      case ":":
+        setCommand({ isActive: true, input: "" });
+        setTimeout(() => commandInputRef.current?.focus(), 0);
         break;
 
       // Search
@@ -1019,8 +1262,35 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
         setTimeout(() => searchInputRef.current?.focus(), 0);
         break;
 
+      case "?":
+        setSearch((prev) => ({ ...prev, isActive: true, pattern: "" }));
+        setTimeout(() => searchInputRef.current?.focus(), 0);
+        setStatusMessage("Search backward (use N to go backward)");
+        break;
+
       case "n": nextMatch(); break;
       case "N": prevMatch(); break;
+
+      // Search word under cursor
+      case "*": searchWordUnderCursor(true); break;
+      case "#": searchWordUnderCursor(false); break;
+
+      // First non-whitespace + count-1 lines down
+      case "_":
+        moveCursor("_", count);
+        break;
+
+      // Tilde: toggle case of character under cursor
+      case "~": {
+        if (cursorPos < value.length) {
+          const char = value[cursorPos];
+          const newChar = char === char.toUpperCase() ? char.toLowerCase() : char.toUpperCase();
+          const newValue = value.slice(0, cursorPos) + newChar + value.slice(cursorPos + 1);
+          onChange(newValue);
+          setCursorPos(Math.min(cursorPos + 1, newValue.length - 1));
+        }
+        break;
+      }
 
       case "Escape":
         exitToNormalMode();
@@ -1029,7 +1299,7 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
 
     setCountBuffer("");
     setCommandBuffer("");
-  }, [awaitingCharInput, commandBuffer, countBuffer, cursorPos, deleteRange, deleteLine, enterInsertMode, enterVisualMode, exitToNormalMode, findCharBackward, findCharForward, getCursorLine, getFirstNonWhitespace, getLineEnd, getLineStart, getMotionTarget, getTextObject, lastCharSearch, lines.length, moveCursor, nextMatch, onChange, pendingOperator, prevMatch, register, value, yankLine, yankRange]);
+  }, [awaitingCharInput, commandBuffer, countBuffer, cursorPos, deleteRange, deleteLine, enterInsertMode, enterVisualMode, exitToNormalMode, findCharBackward, findCharForward, getCursorLine, getFirstNonWhitespace, getLineEnd, getLineStart, getMotionTarget, getTextObject, lastCharSearch, lines.length, moveCursor, nextMatch, onChange, pendingOperator, prevMatch, redo, register, searchWordUnderCursor, undo, value, yankLine, yankRange]);
 
   const handleVisualModeKey = useCallback((e: React.KeyboardEvent) => {
     const key = e.key;
@@ -1049,11 +1319,51 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
       return;
     }
 
+    // Handle text object modifiers (iw, aw, i", etc.)
+    if (commandBuffer === "i" || commandBuffer === "a") {
+      const textObj = getTextObject(commandBuffer as "i" | "a", key);
+      if (textObj) {
+        setSelectionStart(textObj.start);
+        setSelectionEnd(textObj.end - 1);
+        setCursorPos(textObj.end - 1);
+      }
+      setCommandBuffer("");
+      setCountBuffer("");
+      return;
+    }
+
     switch (key) {
+      // Start text object selection
+      case "i":
+      case "a":
+        setCommandBuffer(key);
+        return;
+
       case "h": case "j": case "k": case "l":
-      case "w": case "W": case "e": case "E": case "b": case "B":
+      case "w": case "W": case "E": case "b": case "B":
       case "0": case "^": case "$": case "{": case "}": case "(": case ")": case "%":
+      case "_":
         moveCursor(key, count);
+        break;
+
+      // Handle g-prefix commands and 'e' motion
+      case "g":
+        if (commandBuffer === "g") {
+          moveCursor("gg", count);
+          setCommandBuffer("");
+        } else {
+          setCommandBuffer("g");
+          return;
+        }
+        break;
+
+      case "e":
+        if (commandBuffer === "g") {
+          moveCursor("ge", count);
+          setCommandBuffer("");
+        } else {
+          moveCursor("e", count);
+        }
         break;
 
       case "G":
@@ -1090,20 +1400,35 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
         }
         break;
 
+      case "o":
+        // Swap selection anchor and cursor
+        if (selectionStart !== null && selectionEnd !== null) {
+          const temp = selectionStart;
+          setSelectionStart(selectionEnd);
+          setSelectionEnd(temp);
+          setCursorPos(temp);
+        }
+        break;
+
       case "Escape":
         exitToNormalMode();
         break;
     }
 
     setCountBuffer("");
-  }, [countBuffer, deleteRange, exitToNormalMode, moveCursor, selectionEnd, selectionStart, yankRange]);
+    if (key !== "g" && key !== "i" && key !== "a") {
+      setCommandBuffer("");
+    }
+  }, [commandBuffer, countBuffer, deleteRange, exitToNormalMode, getTextObject, moveCursor, selectionEnd, selectionStart, yankRange]);
 
   const handleInsertModeKey = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
+      // Push current content to history when leaving insert mode
+      pushHistory(value, cursorPos);
       setMode("normal");
       setCursorPos((prev) => Math.max(prev - 1, 0));
     }
-  }, []);
+  }, [cursorPos, pushHistory, value]);
 
   const handleReplaceModeKey = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
@@ -1119,7 +1444,7 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
   }, [cursorPos, onChange, value]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (search.isActive) return;
+    if (search.isActive || command.isActive) return;
 
     if (mode === "normal") {
       e.preventDefault();
@@ -1132,12 +1457,14 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
     } else if (mode === "replace") {
       handleReplaceModeKey(e);
     }
-  }, [mode, search.isActive, handleNormalModeKey, handleVisualModeKey, handleInsertModeKey, handleReplaceModeKey]);
+  }, [command.isActive, mode, search.isActive, handleNormalModeKey, handleVisualModeKey, handleInsertModeKey, handleReplaceModeKey]);
 
   const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     if (mode === "insert") {
-      onChange(e.target.value);
+      const newValue = e.target.value;
+      onChange(newValue);
       setCursorPos(e.target.selectionStart);
+      // Debounce history push (will be pushed when leaving insert mode)
     }
   }, [mode, onChange]);
 
@@ -1155,12 +1482,26 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
     }
   }, []);
 
+  const handleCommandSubmit = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    executeCommand(command.input);
+    setCommand({ isActive: false, input: "" });
+    textareaRef.current?.focus();
+  }, [command.input, executeCommand]);
+
+  const handleCommandKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      setCommand({ isActive: false, input: "" });
+      textareaRef.current?.focus();
+    }
+  }, []);
+
   useEffect(() => {
-    if (textareaRef.current && !search.isActive) {
+    if (textareaRef.current && !search.isActive && !command.isActive) {
       textareaRef.current.focus();
       textareaRef.current.setSelectionRange(cursorPos, cursorPos);
     }
-  }, [cursorPos, search.isActive]);
+  }, [cursorPos, search.isActive, command.isActive]);
 
   useEffect(() => {
     if (statusMessage) {
@@ -1178,6 +1519,7 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
     }
   };
 
+
   const getModeName = () => {
     switch (mode) {
       case "insert": return "INSERT";
@@ -1189,16 +1531,151 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
     }
   };
 
-  const renderHighlightedContent = () => {
-    if (mode !== "visual" && mode !== "visual-line" && mode !== "visual-block") return null;
-    if (selectionStart === null || selectionEnd === null) return null;
-    const start = Math.min(selectionStart, selectionEnd);
-    const end = Math.max(selectionStart, selectionEnd) + 1;
+  // Memoize tokens to avoid re-tokenizing on every render
+  const tokens = useMemo(() => tokenizeLua(value), [value]);
+
+  // Get cursor class based on mode
+  const getCursorClass = useCallback(() => {
+    switch (mode) {
+      case "insert":
+        return "border-l-2 border-green-500 -ml-px";
+      case "replace":
+        return "bg-red-400 text-white border-b-2 border-red-600";
+      case "visual":
+      case "visual-line":
+      case "visual-block":
+        return "bg-sky-500 text-white";
+      default: // normal
+        return "bg-sky-500 text-white";
+    }
+  }, [mode]);
+
+  // Render highlighted text with cursor/selection
+  const renderHighlightedText = useCallback((
+    textTokens: Token[],
+    cursorPosition: number | null,
+    selectionRange: { start: number; end: number } | null,
+    cursorClassName: string
+  ): React.ReactNode[] => {
+    const parts: React.ReactNode[] = [];
+    let key = 0;
+
+    for (const token of textTokens) {
+      const tokenClass = getTokenClass(token.type);
+
+      // Check if cursor is within this token
+      const cursorInToken = cursorPosition !== null &&
+        cursorPosition >= token.start && cursorPosition < token.end;
+
+      // Check if selection overlaps with this token
+      const selOverlaps = selectionRange !== null &&
+        selectionRange.start < token.end && selectionRange.end > token.start;
+
+      if (cursorInToken && mode !== "insert") {
+        const relCursorPos = cursorPosition - token.start;
+        const before = token.value.slice(0, relCursorPos);
+        const cursorChar = token.value[relCursorPos] || " ";
+        const after = token.value.slice(relCursorPos + 1);
+
+        if (before) {
+          parts.push(<span key={key++} className={tokenClass}>{before}</span>);
+        }
+        parts.push(<span key={key++} className={cursorClassName}>{cursorChar}</span>);
+        if (after) {
+          parts.push(<span key={key++} className={tokenClass}>{after}</span>);
+        }
+      } else if (cursorInToken && mode === "insert") {
+        const relCursorPos = cursorPosition - token.start;
+        const before = token.value.slice(0, relCursorPos);
+        const after = token.value.slice(relCursorPos);
+
+        if (before) {
+          parts.push(<span key={key++} className={tokenClass}>{before}</span>);
+        }
+        parts.push(<span key={key++} className={cursorClassName}></span>);
+        if (after) {
+          parts.push(<span key={key++} className={tokenClass}>{after}</span>);
+        }
+      } else if (selOverlaps && selectionRange) {
+        // Handle selection within token
+        const selStart = Math.max(selectionRange.start, token.start);
+        const selEnd = Math.min(selectionRange.end, token.end);
+
+        const beforeSel = token.value.slice(0, selStart - token.start);
+        const inSel = token.value.slice(selStart - token.start, selEnd - token.start);
+        const afterSel = token.value.slice(selEnd - token.start);
+
+        if (beforeSel) {
+          parts.push(<span key={key++} className={tokenClass}>{beforeSel}</span>);
+        }
+        if (inSel) {
+          // Check if cursor is in this selection part
+          if (cursorPosition !== null && cursorPosition >= selStart && cursorPosition < selEnd) {
+            const relCursor = cursorPosition - selStart;
+            parts.push(
+              <span key={key++} className="bg-purple-300 dark:bg-purple-700">
+                {inSel.slice(0, relCursor)}
+              </span>
+            );
+            parts.push(
+              <span key={key++} className={cursorClassName}>
+                {inSel[relCursor]}
+              </span>
+            );
+            parts.push(
+              <span key={key++} className="bg-purple-300 dark:bg-purple-700">
+                {inSel.slice(relCursor + 1)}
+              </span>
+            );
+          } else {
+            parts.push(
+              <span key={key++} className={`bg-purple-300 dark:bg-purple-700 ${tokenClass}`}>
+                {inSel}
+              </span>
+            );
+          }
+        }
+        if (afterSel) {
+          parts.push(<span key={key++} className={tokenClass}>{afterSel}</span>);
+        }
+      } else {
+        parts.push(<span key={key++} className={tokenClass}>{token.value}</span>);
+      }
+    }
+
+    return parts;
+  }, [mode]);
+
+  const renderContent = () => {
+    const isVisual = mode === "visual" || mode === "visual-line" || mode === "visual-block";
+    const selStart = selectionStart !== null && selectionEnd !== null ? Math.min(selectionStart, selectionEnd) : null;
+    const selEnd = selectionStart !== null && selectionEnd !== null ? Math.max(selectionStart, selectionEnd) + 1 : null;
+
+    // Show placeholder when empty
+    if (!value && placeholder) {
+      return (
+        <div className="absolute inset-0 pointer-events-none p-4 font-mono text-sm whitespace-pre-wrap break-all overflow-auto">
+          <span className={mode === "insert" ? "border-l-2 border-green-500" : "bg-sky-500"}> </span>
+          <span className="text-muted-foreground">{placeholder}</span>
+        </div>
+      );
+    }
+
+    const cursorClassName = getCursorClass();
+    const selectionRange = isVisual && selStart !== null && selEnd !== null
+      ? { start: selStart, end: selEnd }
+      : null;
+
+    const highlighted = renderHighlightedText(
+      tokens,
+      cursorPos,
+      selectionRange,
+      cursorClassName
+    );
+
     return (
-      <div className="absolute inset-0 pointer-events-none p-4 font-mono text-sm whitespace-pre-wrap break-all overflow-hidden">
-        <span className="invisible">{value.slice(0, start)}</span>
-        <span className="bg-purple-200">{value.slice(start, end)}</span>
-        <span className="invisible">{value.slice(end)}</span>
+      <div className="absolute inset-0 pointer-events-none p-4 font-mono text-sm whitespace-pre-wrap break-all overflow-auto">
+        {highlighted}
       </div>
     );
   };
@@ -1215,13 +1692,13 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
   return (
     <div className="flex flex-col h-full">
       <div className="relative flex-1 min-h-0 overflow-hidden">
-        {renderHighlightedContent()}
+        {renderContent()}
         <textarea
           ref={textareaRef}
           value={value}
           onChange={handleTextareaChange}
           onKeyDown={handleKeyDown}
-          className="w-full h-full p-4 font-mono text-sm bg-background resize-none focus:outline-none"
+          className="w-full h-full p-4 font-mono text-sm bg-transparent resize-none focus:outline-none text-transparent caret-transparent selection:bg-transparent"
           placeholder={placeholder}
           spellCheck={false}
         />
@@ -1236,6 +1713,21 @@ function VimEditor({ value, onChange, placeholder }: VimEditorProps) {
             onChange={(e) => setSearch((prev) => ({ ...prev, pattern: e.target.value }))}
             onKeyDown={handleSearchKeyDown}
             placeholder="Search pattern (regex)"
+            className="flex-1 h-8"
+            autoFocus
+          />
+        </form>
+      )}
+
+      {command.isActive && (
+        <form onSubmit={handleCommandSubmit} className="shrink-0 border-t p-2 flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">:</span>
+          <Input
+            ref={commandInputRef}
+            value={command.input}
+            onChange={(e) => setCommand((prev) => ({ ...prev, input: e.target.value }))}
+            onKeyDown={handleCommandKeyDown}
+            placeholder="Enter command (w, q, s/find/replace/, %s/find/replace/g, noh)"
             className="flex-1 h-8"
             autoFocus
           />
