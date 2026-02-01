@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 import { Badge } from "src/components/ui/badge";
 import { Input } from "src/components/ui/input";
 import { tokenizeLua, getTokenClass, type Token } from "src/lib/lua-highlighter";
+
+// Constants for virtualization
+const LINE_HEIGHT = 20; // pixels
+const BUFFER_LINES = 5; // extra lines to render above/below viewport
 
 type VimMode = "normal" | "insert" | "visual" | "visual-line" | "visual-block" | "replace";
 
@@ -39,6 +43,166 @@ interface TextObject {
   end: number;
 }
 
+interface LineProps {
+  lineNum: number;
+  lineContent: string;
+  lineStart: number;
+  tokens: Token[];
+  cursorPos: number | null;
+  selectionRange: { start: number; end: number } | null;
+  cursorClassName: string;
+  mode: VimMode;
+  cursorLine: number; // Current cursor line for relative numbering
+  totalLines: number; // Total lines for gutter width calculation
+}
+
+// Memoized line component - only re-renders when its specific props change
+const EditorLine = memo(function EditorLine({
+  lineNum,
+  lineContent,
+  lineStart,
+  tokens,
+  cursorPos,
+  selectionRange,
+  cursorClassName,
+  mode,
+  cursorLine,
+  totalLines,
+}: LineProps) {
+  // Calculate relative line number
+  const isCurrentLine = lineNum === cursorLine;
+  const relativeNum = isCurrentLine ? lineNum + 1 : Math.abs(lineNum - cursorLine);
+
+  // Calculate gutter width based on total lines
+  const gutterWidth = Math.max(3, String(totalLines).length + 1);
+  const lineEnd = lineStart + lineContent.length;
+  const parts: React.ReactNode[] = [];
+  let key = 0;
+  let lastPos = lineStart;
+
+  // Check if cursor is on this line
+  const cursorOnLine = cursorPos !== null && cursorPos >= lineStart && cursorPos < lineEnd + 1;
+  // Check if selection overlaps this line
+  const selectionOnLine = selectionRange !== null &&
+    selectionRange.start < lineEnd + 1 && selectionRange.end > lineStart;
+
+  for (const token of tokens) {
+    const tokenClass = getTokenClass(token.type);
+
+    // Fill any gap before this token
+    if (token.start > lastPos) {
+      const gap = lineContent.slice(lastPos - lineStart, token.start - lineStart);
+      if (cursorOnLine && cursorPos !== null && cursorPos >= lastPos && cursorPos < token.start) {
+        // Cursor is in the gap
+        const beforeCursor = lineContent.slice(lastPos - lineStart, cursorPos - lineStart);
+        if (beforeCursor) parts.push(<span key={key++}>{beforeCursor}</span>);
+
+        const cursorChar = lineContent[cursorPos - lineStart] || "";
+        if (mode === "insert") {
+          parts.push(<span key={key++} className={cursorClassName}></span>);
+        } else if (cursorChar === "" || cursorPos >= lineEnd) {
+          parts.push(<span key={key++} className={cursorClassName}>{" "}</span>);
+        } else {
+          parts.push(<span key={key++} className={cursorClassName}>{cursorChar}</span>);
+        }
+
+        const afterCursor = lineContent.slice(cursorPos - lineStart + (mode === "insert" ? 0 : 1), token.start - lineStart);
+        if (afterCursor) parts.push(<span key={key++}>{afterCursor}</span>);
+      } else if (gap) {
+        parts.push(<span key={key++}>{gap}</span>);
+      }
+    }
+    lastPos = token.end;
+
+    // Check if cursor is within this token
+    const cursorInToken = cursorPos !== null && cursorPos >= token.start && cursorPos < token.end;
+    const selInToken = selectionOnLine && selectionRange !== null &&
+      selectionRange.start < token.end && selectionRange.end > token.start;
+
+    if (cursorInToken && mode !== "insert") {
+      const relPos = cursorPos - token.start;
+      const before = token.value.slice(0, relPos);
+      const cursorChar = token.value[relPos] || " ";
+      const after = token.value.slice(relPos + 1);
+
+      if (before) parts.push(<span key={key++} className={tokenClass}>{before}</span>);
+      parts.push(<span key={key++} className={cursorClassName}>{cursorChar}</span>);
+      if (after) parts.push(<span key={key++} className={tokenClass}>{after}</span>);
+    } else if (cursorInToken && mode === "insert") {
+      const relPos = cursorPos - token.start;
+      const before = token.value.slice(0, relPos);
+      const after = token.value.slice(relPos);
+
+      if (before) parts.push(<span key={key++} className={tokenClass}>{before}</span>);
+      parts.push(<span key={key++} className={cursorClassName}></span>);
+      if (after) parts.push(<span key={key++} className={tokenClass}>{after}</span>);
+    } else if (selInToken && selectionRange) {
+      const selStart = Math.max(selectionRange.start, token.start);
+      const selEnd = Math.min(selectionRange.end, token.end);
+
+      const beforeSel = token.value.slice(0, selStart - token.start);
+      const inSel = token.value.slice(selStart - token.start, selEnd - token.start);
+      const afterSel = token.value.slice(selEnd - token.start);
+
+      if (beforeSel) parts.push(<span key={key++} className={tokenClass}>{beforeSel}</span>);
+      if (inSel) {
+        parts.push(<span key={key++} className={`bg-purple-300 dark:bg-purple-700 ${tokenClass}`}>{inSel}</span>);
+      }
+      if (afterSel) parts.push(<span key={key++} className={tokenClass}>{afterSel}</span>);
+    } else {
+      parts.push(<span key={key++} className={tokenClass}>{token.value}</span>);
+    }
+  }
+
+  // Handle cursor at end of line (after all tokens)
+  if (cursorOnLine && cursorPos !== null && cursorPos >= lastPos) {
+    const gap = lineContent.slice(lastPos - lineStart);
+    if (cursorPos > lastPos && cursorPos < lineEnd) {
+      const beforeCursor = lineContent.slice(lastPos - lineStart, cursorPos - lineStart);
+      if (beforeCursor) parts.push(<span key={key++}>{beforeCursor}</span>);
+    }
+
+    if (cursorPos >= lineEnd) {
+      // Cursor at end of line
+      if (mode === "insert") {
+        parts.push(<span key={key++} className={cursorClassName}></span>);
+      } else {
+        parts.push(<span key={key++} className={cursorClassName}>{" "}</span>);
+      }
+    } else if (cursorPos >= lastPos) {
+      const cursorChar = lineContent[cursorPos - lineStart];
+      if (mode === "insert") {
+        parts.push(<span key={key++} className={cursorClassName}></span>);
+        if (gap) parts.push(<span key={key++}>{gap}</span>);
+      } else {
+        parts.push(<span key={key++} className={cursorClassName}>{cursorChar || " "}</span>);
+        const after = lineContent.slice(cursorPos - lineStart + 1);
+        if (after) parts.push(<span key={key++}>{after}</span>);
+      }
+    }
+  } else if (lastPos < lineEnd) {
+    // Remaining content after tokens
+    const remaining = lineContent.slice(lastPos - lineStart);
+    if (remaining) parts.push(<span key={key++}>{remaining}</span>);
+  }
+
+  return (
+    <div style={{ height: LINE_HEIGHT }} className="flex">
+      {/* Line number gutter */}
+      <span
+        className={`shrink-0 select-none text-right pr-3 ${
+          isCurrentLine ? 'text-yellow-500 font-medium' : 'text-muted-foreground'
+        }`}
+        style={{ width: `${gutterWidth}ch` }}
+      >
+        {relativeNum}
+      </span>
+      {/* Line content */}
+      <span className="whitespace-pre flex-1">{parts.length > 0 ? parts : " "}</span>
+    </div>
+  );
+});
+
 function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
   const [mode, setMode] = useState<VimMode>("normal");
   const [cursorPos, setCursorPos] = useState(0);
@@ -66,33 +230,60 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
   const [history, setHistory] = useState<HistoryEntry[]>([{ content: value, cursorPos: 0 }]);
   const [historyIndex, setHistoryIndex] = useState(0);
 
+  // Macro recording
+  const [macroRecording, setMacroRecording] = useState<string | null>(null); // Register being recorded to
+  const [macroRegisters, setMacroRegisters] = useState<Record<string, string[]>>({}); // Stored macros
+  const [lastMacroRegister, setLastMacroRegister] = useState<string | null>(null); // Last played macro
+  const [awaitingMacroRegister, setAwaitingMacroRegister] = useState<"record" | "play" | null>(null);
+  const [isPlayingMacro, setIsPlayingMacro] = useState(false);
+  const currentMacroKeys = useRef<string[]>([]); // Keys being recorded
+
+  // Insert mode repeat count (for commands like 5itext<Esc>)
+  const [insertRepeatCount, setInsertRepeatCount] = useState(1);
+  const [insertStartPos, setInsertStartPos] = useState(0);
+
+  // Virtualization state
+  const [scrollTop, setScrollTop] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(500);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const commandInputRef = useRef<HTMLInputElement>(null);
 
-  const lines = value.split("\n");
+  // Memoize lines array to prevent recreation on every render
+  const lines = useMemo(() => value.split("\n"), [value]);
 
-  const getCursorLine = useCallback(() => {
+  // Precompute cumulative line positions for O(1) position lookups
+  const linePositions = useMemo(() => {
+    const positions: number[] = [0];
     let pos = 0;
     for (let i = 0; i < lines.length; i++) {
-      if (pos + lines[i].length >= cursorPos) {
-        return i;
-      }
-      pos += lines[i].length + 1;
+      pos += lines[i].length + 1; // +1 for newline
+      positions.push(pos);
     }
-    return lines.length - 1;
-  }, [cursorPos, lines]);
+    return positions;
+  }, [lines]);
+
+  // Binary search for cursor line - O(log n) instead of O(n)
+  const getCursorLine = useCallback(() => {
+    let left = 0;
+    let right = linePositions.length - 2; // -2 because last element is end position
+    while (left < right) {
+      const mid = Math.floor((left + right + 1) / 2);
+      if (linePositions[mid] <= cursorPos) {
+        left = mid;
+      } else {
+        right = mid - 1;
+      }
+    }
+    return Math.min(left, lines.length - 1);
+  }, [cursorPos, linePositions, lines.length]);
 
   const getCursorColumn = useCallback(() => {
-    let pos = 0;
-    for (let i = 0; i < lines.length; i++) {
-      if (pos + lines[i].length >= cursorPos) {
-        return cursorPos - pos;
-      }
-      pos += lines[i].length + 1;
-    }
-    return 0;
-  }, [cursorPos, lines]);
+    const line = getCursorLine();
+    return cursorPos - linePositions[line];
+  }, [cursorPos, getCursorLine, linePositions]);
 
   const getPositionFromLineCol = useCallback(
     (line: number, col: number) => {
@@ -109,13 +300,10 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
 
   const getLineStart = useCallback(
     (line: number) => {
-      let pos = 0;
-      for (let i = 0; i < line && i < lines.length; i++) {
-        pos += lines[i].length + 1;
-      }
-      return pos;
+      const clampedLine = Math.max(0, Math.min(line, lines.length - 1));
+      return linePositions[clampedLine] ?? 0;
     },
-    [lines]
+    [linePositions, lines.length]
   );
 
   const getLineEnd = useCallback(
@@ -686,6 +874,8 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
       pushHistory(newValue, newCursorPos);
     }
     if (enterInsert) {
+      setInsertStartPos(newCursorPos);
+      setInsertRepeatCount(1); // Change operations don't repeat inserted text
       setMode("insert");
     }
     return deletedText;
@@ -725,6 +915,8 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
       const after = value.slice(lineEndPos);
       onChange(before + after);
       setCursorPos(lineStartPos);
+      setInsertStartPos(lineStartPos);
+      setInsertRepeatCount(1); // cc/S don't repeat inserted text
       setMode("insert");
     }
   }, [getCursorLine, getLineEnd, getLineStart, lines.length, onChange, value]);
@@ -900,16 +1092,20 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
   }, [cursorPos, getCursorLine, getLineEnd, getLineStart, lines.length, onChange, onSave, pushHistory, value]);
 
   // ============ Mode transitions ============
-  const enterInsertMode = useCallback((position: "before" | "after" | "lineStart" | "lineEnd" | "firstNonWhitespace") => {
+  const enterInsertMode = useCallback((position: "before" | "after" | "lineStart" | "lineEnd" | "firstNonWhitespace", count: number = 1) => {
     setMode("insert");
+    setInsertRepeatCount(count);
     const currentLine = getCursorLine();
+    let newCursorPos = cursorPos;
     switch (position) {
-      case "after": setCursorPos((prev) => Math.min(prev + 1, value.length)); break;
-      case "lineStart": setCursorPos(getLineStart(currentLine)); break;
-      case "lineEnd": setCursorPos(getLineEnd(currentLine)); break;
-      case "firstNonWhitespace": setCursorPos(getFirstNonWhitespace(currentLine)); break;
+      case "after": newCursorPos = Math.min(cursorPos + 1, value.length); break;
+      case "lineStart": newCursorPos = getLineStart(currentLine); break;
+      case "lineEnd": newCursorPos = getLineEnd(currentLine); break;
+      case "firstNonWhitespace": newCursorPos = getFirstNonWhitespace(currentLine); break;
     }
-  }, [getCursorLine, getFirstNonWhitespace, getLineEnd, getLineStart, value.length]);
+    setCursorPos(newCursorPos);
+    setInsertStartPos(newCursorPos);
+  }, [cursorPos, getCursorLine, getFirstNonWhitespace, getLineEnd, getLineStart, value.length]);
 
   const enterVisualMode = useCallback((type: "visual" | "visual-line" | "visual-block") => {
     setMode(type);
@@ -927,10 +1123,98 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
     setAwaitingCharInput(null);
   }, []);
 
+  // ============ Macro playback ============
+  const macroQueueRef = useRef<{ keys: string[], index: number } | null>(null);
+  const keyHandlerRef = useRef<((e: React.KeyboardEvent) => void) | null>(null);
+
+  const playMacro = useCallback((keys: string[]) => {
+    if (keys.length === 0) return;
+
+    macroQueueRef.current = { keys: [...keys], index: 0 };
+    setIsPlayingMacro(true);
+
+    const processNextKey = () => {
+      const queue = macroQueueRef.current;
+      if (!queue || queue.index >= queue.keys.length) {
+        macroQueueRef.current = null;
+        setIsPlayingMacro(false);
+        return;
+      }
+
+      const key = queue.keys[queue.index];
+      queue.index++;
+
+      // Create synthetic event and call the handler directly
+      if (keyHandlerRef.current) {
+        const syntheticEvent = {
+          key,
+          ctrlKey: false,
+          metaKey: false,
+          altKey: false,
+          shiftKey: /^[A-Z]$/.test(key),
+          preventDefault: () => {},
+        } as React.KeyboardEvent;
+
+        keyHandlerRef.current(syntheticEvent);
+      }
+
+      // Schedule next key with delay for state updates
+      setTimeout(processNextKey, 15);
+    };
+
+    setTimeout(processNextKey, 15);
+  }, []);
+
   // ============ Key handlers ============
   const handleNormalModeKey = useCallback((e: React.KeyboardEvent) => {
     const key = e.key;
     const count = parseInt(countBuffer) || 1;
+
+    // Handle macro register input (q{reg} or @{reg})
+    if (awaitingMacroRegister) {
+      if (key === "Escape") {
+        setAwaitingMacroRegister(null);
+        return;
+      }
+      if (/^[a-z]$/.test(key)) {
+        if (awaitingMacroRegister === "record") {
+          // Start recording to this register
+          setMacroRecording(key);
+          currentMacroKeys.current = [];
+          setStatusMessage(`Recording @${key}`);
+        } else if (awaitingMacroRegister === "play") {
+          // Play macro from this register
+          const macro = macroRegisters[key];
+          if (macro && macro.length > 0) {
+            setLastMacroRegister(key);
+            playMacro(macro);
+          } else {
+            setStatusMessage(`Macro @${key} is empty`);
+          }
+        }
+        setAwaitingMacroRegister(null);
+        setCountBuffer("");
+        setCommandBuffer("");
+        return;
+      }
+      // Handle @@ (replay last macro)
+      if (awaitingMacroRegister === "play" && key === "@") {
+        if (lastMacroRegister && macroRegisters[lastMacroRegister]) {
+          playMacro(macroRegisters[lastMacroRegister]);
+        } else {
+          setStatusMessage("No macro to replay");
+        }
+        setAwaitingMacroRegister(null);
+        setCountBuffer("");
+        setCommandBuffer("");
+        return;
+      }
+    }
+
+    // Record key for macro (if recording and not the stop key)
+    if (macroRecording && !isPlayingMacro && !(key === "q" && !awaitingCharInput && !pendingOperator && !commandBuffer)) {
+      currentMacroKeys.current.push(key);
+    }
 
     // Handle character input waiting (r, f, F, t, T)
     if (awaitingCharInput) {
@@ -1130,6 +1414,8 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
           const newValue = value.slice(0, cursorPos) + value.slice(cursorPos + count);
           onChange(newValue);
         }
+        setInsertStartPos(cursorPos);
+        setInsertRepeatCount(1); // s doesn't repeat inserted text
         setMode("insert");
         break;
       }
@@ -1139,7 +1425,12 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
         const currentLine = getCursorLine();
         const lineStart = getFirstNonWhitespace(currentLine);
         const lineEnd = getLineEnd(currentLine);
-        deleteRange(lineStart, lineEnd, true);
+        const newValue = value.slice(0, lineStart) + value.slice(lineEnd);
+        onChange(newValue);
+        setCursorPos(lineStart);
+        setInsertStartPos(lineStart);
+        setInsertRepeatCount(1);
+        setMode("insert");
         break;
       }
 
@@ -1165,15 +1456,18 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
       }
 
       // Insert mode
-      case "i": enterInsertMode("before"); break;
-      case "a": enterInsertMode("after"); break;
-      case "I": enterInsertMode("firstNonWhitespace"); break;
-      case "A": enterInsertMode("lineEnd"); break;
+      case "i": enterInsertMode("before", count); break;
+      case "a": enterInsertMode("after", count); break;
+      case "I": enterInsertMode("firstNonWhitespace", count); break;
+      case "A": enterInsertMode("lineEnd", count); break;
 
       case "o": {
         const lineEnd = getLineEnd(getCursorLine());
         onChange(value.slice(0, lineEnd) + "\n" + value.slice(lineEnd));
-        setCursorPos(lineEnd + 1);
+        const newPos = lineEnd + 1;
+        setCursorPos(newPos);
+        setInsertStartPos(newPos);
+        setInsertRepeatCount(count);
         setMode("insert");
         break;
       }
@@ -1182,6 +1476,8 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
         const lineStart = getLineStart(getCursorLine());
         onChange(value.slice(0, lineStart) + "\n" + value.slice(lineStart));
         setCursorPos(lineStart);
+        setInsertStartPos(lineStart);
+        setInsertRepeatCount(count);
         setMode("insert");
         break;
       }
@@ -1292,6 +1588,28 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
         break;
       }
 
+      // Macro recording
+      case "q":
+        if (macroRecording) {
+          // Stop recording
+          setMacroRegisters(prev => ({
+            ...prev,
+            [macroRecording]: [...currentMacroKeys.current]
+          }));
+          setStatusMessage(`Recorded @${macroRecording} (${currentMacroKeys.current.length} keys)`);
+          setMacroRecording(null);
+          currentMacroKeys.current = [];
+        } else {
+          // Start recording - await register
+          setAwaitingMacroRegister("record");
+        }
+        break;
+
+      // Macro playback
+      case "@":
+        setAwaitingMacroRegister("play");
+        return;
+
       case "Escape":
         exitToNormalMode();
         break;
@@ -1299,7 +1617,7 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
 
     setCountBuffer("");
     setCommandBuffer("");
-  }, [awaitingCharInput, commandBuffer, countBuffer, cursorPos, deleteRange, deleteLine, enterInsertMode, enterVisualMode, exitToNormalMode, findCharBackward, findCharForward, getCursorLine, getFirstNonWhitespace, getLineEnd, getLineStart, getMotionTarget, getTextObject, lastCharSearch, lines.length, moveCursor, nextMatch, onChange, pendingOperator, prevMatch, redo, register, searchWordUnderCursor, undo, value, yankLine, yankRange]);
+  }, [awaitingCharInput, awaitingMacroRegister, commandBuffer, countBuffer, cursorPos, deleteRange, deleteLine, enterInsertMode, enterVisualMode, exitToNormalMode, findCharBackward, findCharForward, getCursorLine, getFirstNonWhitespace, getLineEnd, getLineStart, getMotionTarget, getTextObject, isPlayingMacro, lastCharSearch, lastMacroRegister, lines.length, macroRecording, macroRegisters, moveCursor, nextMatch, onChange, pendingOperator, playMacro, prevMatch, redo, register, searchWordUnderCursor, undo, value, yankLine, yankRange]);
 
   const handleVisualModeKey = useCallback((e: React.KeyboardEvent) => {
     const key = e.key;
@@ -1422,15 +1740,59 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
   }, [commandBuffer, countBuffer, deleteRange, exitToNormalMode, getTextObject, moveCursor, selectionEnd, selectionStart, yankRange]);
 
   const handleInsertModeKey = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Escape") {
-      // Push current content to history when leaving insert mode
-      pushHistory(value, cursorPos);
-      setMode("normal");
-      setCursorPos((prev) => Math.max(prev - 1, 0));
+    // Record keys for macro (if recording)
+    if (macroRecording && !isPlayingMacro) {
+      currentMacroKeys.current.push(e.key);
     }
-  }, [cursorPos, pushHistory, value]);
+
+    if (e.key === "Escape") {
+      // Get the text that was inserted during this insert session
+      const insertedText = value.slice(insertStartPos, cursorPos);
+
+      // If we have a repeat count > 1, repeat the inserted text
+      if (insertRepeatCount > 1 && insertedText.length > 0) {
+        const repeatedText = insertedText.repeat(insertRepeatCount - 1);
+        const newValue = value.slice(0, cursorPos) + repeatedText + value.slice(cursorPos);
+        const newCursorPos = cursorPos + repeatedText.length;
+        onChange(newValue);
+        pushHistory(newValue, newCursorPos);
+        setCursorPos(Math.max(newCursorPos - 1, 0));
+      } else {
+        // Push current content to history when leaving insert mode
+        pushHistory(value, cursorPos);
+        setCursorPos((prev) => Math.max(prev - 1, 0));
+      }
+
+      setMode("normal");
+      setInsertRepeatCount(1);
+    } else if (e.key === "Backspace") {
+      // Handle backspace during macro playback
+      if (isPlayingMacro && cursorPos > 0) {
+        const newValue = value.slice(0, cursorPos - 1) + value.slice(cursorPos);
+        onChange(newValue);
+        setCursorPos(cursorPos - 1);
+      }
+    } else if (e.key === "Enter") {
+      // Handle enter during macro playback
+      if (isPlayingMacro) {
+        const newValue = value.slice(0, cursorPos) + "\n" + value.slice(cursorPos);
+        onChange(newValue);
+        setCursorPos(cursorPos + 1);
+      }
+    } else if (isPlayingMacro && e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+      // Insert character during macro playback
+      const newValue = value.slice(0, cursorPos) + e.key + value.slice(cursorPos);
+      onChange(newValue);
+      setCursorPos(cursorPos + 1);
+    }
+  }, [cursorPos, insertRepeatCount, insertStartPos, isPlayingMacro, macroRecording, onChange, pushHistory, value]);
 
   const handleReplaceModeKey = useCallback((e: React.KeyboardEvent) => {
+    // Record keys for macro (if recording)
+    if (macroRecording && !isPlayingMacro) {
+      currentMacroKeys.current.push(e.key);
+    }
+
     if (e.key === "Escape") {
       setMode("normal");
       return;
@@ -1441,7 +1803,7 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
       onChange(newValue);
       setCursorPos(cursorPos + 1);
     }
-  }, [cursorPos, onChange, value]);
+  }, [cursorPos, isPlayingMacro, macroRecording, onChange, value]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (search.isActive || command.isActive) return;
@@ -1458,6 +1820,11 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
       handleReplaceModeKey(e);
     }
   }, [command.isActive, mode, search.isActive, handleNormalModeKey, handleVisualModeKey, handleInsertModeKey, handleReplaceModeKey]);
+
+  // Store handleKeyDown in ref for macro playback
+  useEffect(() => {
+    keyHandlerRef.current = handleKeyDown;
+  }, [handleKeyDown]);
 
   const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     if (mode === "insert") {
@@ -1496,12 +1863,71 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
     }
   }, []);
 
+  // Sync scroll between textarea and content overlay + update virtualization
+  const handleScroll = useCallback(() => {
+    if (textareaRef.current) {
+      const newScrollTop = textareaRef.current.scrollTop;
+      setScrollTop(newScrollTop);
+      if (contentRef.current) {
+        contentRef.current.scrollTop = newScrollTop;
+        contentRef.current.scrollLeft = textareaRef.current.scrollLeft;
+      }
+    }
+  }, []);
+
+  // Handle mouse click to move cursor to clicked position
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLTextAreaElement>) => {
+    // Let the native textarea handle the click to set selection
+    // We'll read the selection position after a small delay
+    setTimeout(() => {
+      if (textareaRef.current) {
+        const newPos = textareaRef.current.selectionStart;
+        setCursorPos(Math.min(newPos, Math.max(0, value.length - 1)));
+
+        // In normal mode, exit any pending states
+        if (mode === "normal") {
+          setCommandBuffer("");
+          setCountBuffer("");
+          setPendingOperator(null);
+          setAwaitingCharInput(null);
+        }
+      }
+    }, 0);
+  }, [value.length, mode]);
+
   useEffect(() => {
     if (textareaRef.current && !search.isActive && !command.isActive) {
       textareaRef.current.focus();
       textareaRef.current.setSelectionRange(cursorPos, cursorPos);
+
+      // Auto-scroll to keep cursor visible
+      const textarea = textareaRef.current;
+      const lineHeight = 20; // Approximate line height in pixels
+      const currentLine = getCursorLine();
+      const scrollTop = textarea.scrollTop;
+      const clientHeight = textarea.clientHeight;
+      const padding = 16; // p-4 = 16px
+
+      const cursorTop = currentLine * lineHeight;
+      const cursorBottom = cursorTop + lineHeight;
+
+      // Scroll down if cursor is below visible area
+      if (cursorBottom > scrollTop + clientHeight - padding * 2) {
+        const newScrollTop = cursorBottom - clientHeight + padding * 2;
+        textarea.scrollTop = newScrollTop;
+        if (contentRef.current) {
+          contentRef.current.scrollTop = newScrollTop;
+        }
+      }
+      // Scroll up if cursor is above visible area
+      else if (cursorTop < scrollTop) {
+        textarea.scrollTop = cursorTop;
+        if (contentRef.current) {
+          contentRef.current.scrollTop = cursorTop;
+        }
+      }
     }
-  }, [cursorPos, search.isActive, command.isActive]);
+  }, [cursorPos, search.isActive, command.isActive, getCursorLine]);
 
   useEffect(() => {
     if (statusMessage) {
@@ -1509,6 +1935,14 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
       return () => clearTimeout(timer);
     }
   }, [statusMessage]);
+
+  // Calculate gutter width for line numbers (in ch units)
+  const gutterWidth = useMemo(() => {
+    return Math.max(3, String(lines.length).length + 1);
+  }, [lines.length]);
+
+  // Gutter width in pixels (approximate: 1ch ≈ 8px for monospace + padding)
+  const gutterPixels = gutterWidth * 8 + 12; // 12px for pr-3 padding
 
   const getModeColor = () => {
     switch (mode) {
@@ -1531,8 +1965,46 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
     }
   };
 
-  // Memoize tokens to avoid re-tokenizing on every render
-  const tokens = useMemo(() => tokenizeLua(value), [value]);
+  // Track container height for virtualization
+  useEffect(() => {
+    const updateHeight = () => {
+      if (textareaRef.current) {
+        setContainerHeight(textareaRef.current.clientHeight);
+      }
+    };
+    updateHeight();
+    window.addEventListener('resize', updateHeight);
+    return () => window.removeEventListener('resize', updateHeight);
+  }, []);
+
+  // Calculate visible line range for virtualization
+  const visibleLineRange = useMemo(() => {
+    const startLine = Math.max(0, Math.floor(scrollTop / LINE_HEIGHT) - BUFFER_LINES);
+    const visibleLines = Math.ceil(containerHeight / LINE_HEIGHT) + BUFFER_LINES * 2;
+    const endLine = Math.min(lines.length - 1, startLine + visibleLines);
+    return { startLine, endLine };
+  }, [scrollTop, containerHeight, lines.length]);
+
+  // Tokenize only visible lines for performance
+  const visibleTokensByLine = useMemo(() => {
+    const tokensByLine: Map<number, Token[]> = new Map();
+    const { startLine, endLine } = visibleLineRange;
+
+    for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
+      const lineStart = linePositions[lineNum];
+      const lineEnd = linePositions[lineNum + 1] ?? value.length;
+      const lineContent = value.slice(lineStart, lineEnd);
+      const lineTokens = tokenizeLua(lineContent);
+      // Adjust token positions to be absolute
+      const adjustedTokens = lineTokens.map(token => ({
+        ...token,
+        start: token.start + lineStart,
+        end: token.end + lineStart,
+      }));
+      tokensByLine.set(lineNum, adjustedTokens);
+    }
+    return tokensByLine;
+  }, [value, visibleLineRange, linePositions]);
 
   // Get cursor class based on mode
   const getCursorClass = useCallback(() => {
@@ -1546,106 +2018,10 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
       case "visual-block":
         return "bg-sky-500 text-white";
       default: // normal
-        return "bg-sky-500 text-white";
+        // Use inline-block to ensure cursor has dimensions even on empty/whitespace
+        return "bg-sky-500 text-white inline-block min-w-[0.6em]";
     }
   }, [mode]);
-
-  // Render highlighted text with cursor/selection
-  const renderHighlightedText = useCallback((
-    textTokens: Token[],
-    cursorPosition: number | null,
-    selectionRange: { start: number; end: number } | null,
-    cursorClassName: string
-  ): React.ReactNode[] => {
-    const parts: React.ReactNode[] = [];
-    let key = 0;
-
-    for (const token of textTokens) {
-      const tokenClass = getTokenClass(token.type);
-
-      // Check if cursor is within this token
-      const cursorInToken = cursorPosition !== null &&
-        cursorPosition >= token.start && cursorPosition < token.end;
-
-      // Check if selection overlaps with this token
-      const selOverlaps = selectionRange !== null &&
-        selectionRange.start < token.end && selectionRange.end > token.start;
-
-      if (cursorInToken && mode !== "insert") {
-        const relCursorPos = cursorPosition - token.start;
-        const before = token.value.slice(0, relCursorPos);
-        const cursorChar = token.value[relCursorPos] || " ";
-        const after = token.value.slice(relCursorPos + 1);
-
-        if (before) {
-          parts.push(<span key={key++} className={tokenClass}>{before}</span>);
-        }
-        parts.push(<span key={key++} className={cursorClassName}>{cursorChar}</span>);
-        if (after) {
-          parts.push(<span key={key++} className={tokenClass}>{after}</span>);
-        }
-      } else if (cursorInToken && mode === "insert") {
-        const relCursorPos = cursorPosition - token.start;
-        const before = token.value.slice(0, relCursorPos);
-        const after = token.value.slice(relCursorPos);
-
-        if (before) {
-          parts.push(<span key={key++} className={tokenClass}>{before}</span>);
-        }
-        parts.push(<span key={key++} className={cursorClassName}></span>);
-        if (after) {
-          parts.push(<span key={key++} className={tokenClass}>{after}</span>);
-        }
-      } else if (selOverlaps && selectionRange) {
-        // Handle selection within token
-        const selStart = Math.max(selectionRange.start, token.start);
-        const selEnd = Math.min(selectionRange.end, token.end);
-
-        const beforeSel = token.value.slice(0, selStart - token.start);
-        const inSel = token.value.slice(selStart - token.start, selEnd - token.start);
-        const afterSel = token.value.slice(selEnd - token.start);
-
-        if (beforeSel) {
-          parts.push(<span key={key++} className={tokenClass}>{beforeSel}</span>);
-        }
-        if (inSel) {
-          // Check if cursor is in this selection part
-          if (cursorPosition !== null && cursorPosition >= selStart && cursorPosition < selEnd) {
-            const relCursor = cursorPosition - selStart;
-            parts.push(
-              <span key={key++} className="bg-purple-300 dark:bg-purple-700">
-                {inSel.slice(0, relCursor)}
-              </span>
-            );
-            parts.push(
-              <span key={key++} className={cursorClassName}>
-                {inSel[relCursor]}
-              </span>
-            );
-            parts.push(
-              <span key={key++} className="bg-purple-300 dark:bg-purple-700">
-                {inSel.slice(relCursor + 1)}
-              </span>
-            );
-          } else {
-            parts.push(
-              <span key={key++} className={`bg-purple-300 dark:bg-purple-700 ${tokenClass}`}>
-                {inSel}
-              </span>
-            );
-          }
-        }
-        if (afterSel) {
-          parts.push(<span key={key++} className={tokenClass}>{afterSel}</span>);
-        }
-      } else {
-        parts.push(<span key={key++} className={tokenClass}>{token.value}</span>);
-      }
-    }
-
-    return parts;
-  }, [mode]);
-
   const renderContent = () => {
     const isVisual = mode === "visual" || mode === "visual-line" || mode === "visual-block";
     const selStart = selectionStart !== null && selectionEnd !== null ? Math.min(selectionStart, selectionEnd) : null;
@@ -1654,28 +2030,95 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
     // Show placeholder when empty
     if (!value && placeholder) {
       return (
-        <div className="absolute inset-0 pointer-events-none p-4 font-mono text-sm whitespace-pre-wrap break-all overflow-auto">
-          <span className={mode === "insert" ? "border-l-2 border-green-500" : "bg-sky-500"}> </span>
-          <span className="text-muted-foreground">{placeholder}</span>
+        <div ref={contentRef} className="absolute inset-0 pointer-events-none p-4 font-mono text-sm overflow-auto">
+          <div className="flex" style={{ height: LINE_HEIGHT }}>
+            <span
+              className="shrink-0 select-none text-right pr-3 text-yellow-500 font-medium"
+              style={{ width: `${gutterWidth}ch` }}
+            >
+              1
+            </span>
+            <span className="whitespace-pre flex-1">
+              <span className={mode === "insert" ? "border-l-2 border-green-500" : "bg-sky-500"}> </span>
+              <span className="text-muted-foreground">{placeholder}</span>
+            </span>
+          </div>
         </div>
       );
     }
 
     const cursorClassName = getCursorClass();
-    const selectionRange = isVisual && selStart !== null && selEnd !== null
+    let selectionRange = isVisual && selStart !== null && selEnd !== null
       ? { start: selStart, end: selEnd }
       : null;
 
-    const highlighted = renderHighlightedText(
-      tokens,
-      cursorPos,
-      selectionRange,
-      cursorClassName
-    );
+    // For visual-line mode, expand selection to cover full lines
+    if (mode === "visual-line" && selectionRange) {
+      // Find line containing selection start
+      let startLineNum = 0;
+      for (let i = linePositions.length - 2; i >= 0; i--) {
+        if (linePositions[i] <= selectionRange.start) {
+          startLineNum = i;
+          break;
+        }
+      }
+
+      // Find line containing selection end (selEnd is exclusive, so use selEnd - 1)
+      let endLineNum = lines.length - 1;
+      for (let i = linePositions.length - 2; i >= 0; i--) {
+        if (linePositions[i] <= selectionRange.end - 1) {
+          endLineNum = i;
+          break;
+        }
+      }
+
+      // Expand selection to full lines (end at last char of line, not the newline)
+      selectionRange = {
+        start: linePositions[startLineNum],
+        end: linePositions[endLineNum] + lines[endLineNum].length
+      };
+    }
+
+    const { startLine, endLine } = visibleLineRange;
+    const totalHeight = lines.length * LINE_HEIGHT;
+    const currentCursorLine = getCursorLine();
+
+    // Render only visible lines with spacers for virtualization
+    const visibleLines: React.ReactNode[] = [];
+
+    for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
+      const lineStart = linePositions[lineNum];
+      const lineEnd = linePositions[lineNum + 1] ?? value.length;
+      const lineContent = value.slice(lineStart, lineEnd);
+      const tokens = visibleTokensByLine.get(lineNum) || [];
+
+      // Only pass cursor if it's on this line
+      const cursorOnLine = cursorPos >= lineStart && cursorPos < lineEnd + 1;
+
+      visibleLines.push(
+        <EditorLine
+          key={lineNum}
+          lineNum={lineNum}
+          lineContent={lineContent}
+          lineStart={lineStart}
+          tokens={tokens}
+          cursorPos={cursorOnLine ? cursorPos : null}
+          selectionRange={selectionRange}
+          cursorClassName={cursorClassName}
+          mode={mode}
+          cursorLine={currentCursorLine}
+          totalLines={lines.length}
+        />
+      );
+    }
 
     return (
-      <div className="absolute inset-0 pointer-events-none p-4 font-mono text-sm whitespace-pre-wrap break-all overflow-auto">
-        {highlighted}
+      <div ref={contentRef} className="absolute inset-0 pointer-events-none p-4 font-mono text-sm overflow-auto">
+        <div style={{ height: totalHeight, position: 'relative' }}>
+          <div style={{ position: 'absolute', top: startLine * LINE_HEIGHT, left: 0, right: 0 }}>
+            {visibleLines}
+          </div>
+        </div>
       </div>
     );
   };
@@ -1698,7 +2141,10 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
           value={value}
           onChange={handleTextareaChange}
           onKeyDown={handleKeyDown}
-          className="w-full h-full p-4 font-mono text-sm bg-transparent resize-none focus:outline-none text-transparent caret-transparent selection:bg-transparent"
+          onScroll={handleScroll}
+          onMouseDown={handleMouseDown}
+          className="w-full h-full py-4 pr-4 font-mono text-sm bg-transparent resize-none focus:outline-none text-transparent caret-transparent selection:bg-transparent"
+          style={{ paddingLeft: `${16 + gutterPixels}px` }}
           placeholder={placeholder}
           spellCheck={false}
         />
@@ -1739,6 +2185,17 @@ function VimEditor({ value, onChange, onSave, placeholder }: VimEditorProps) {
           <Badge variant="outline" className={getModeColor()}>
             {getModeName()}
           </Badge>
+          {macroRecording && (
+            <Badge variant="outline" className="bg-red-100 text-red-700 border-red-300 animate-pulse">
+              REC @{macroRecording}
+            </Badge>
+          )}
+          {awaitingMacroRegister === "record" && (
+            <span className="text-sm font-mono text-muted-foreground">q</span>
+          )}
+          {awaitingMacroRegister === "play" && (
+            <span className="text-sm font-mono text-muted-foreground">@</span>
+          )}
           {getStatusDisplay() && (
             <span className="text-sm font-mono text-muted-foreground">{getStatusDisplay()}</span>
           )}
