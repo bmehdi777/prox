@@ -45,17 +45,20 @@ func (m *Middleware) RedirectTarget(next http.Handler) http.Handler {
 func (m *Middleware) Redirect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		newReqRes := RequestResponse{
-			Req: r,
+			Id: len(RequestResponseList),
+			Method: 
 		}
 		response, err := m.redirectRequest(r)
 		if err != nil {
 			fmt.Println("Error while redirecting request : ", err)
 			RequestResponseList = append(RequestResponseList, newReqRes)
+			RRLChannel <- 1
 			next.ServeHTTP(w, r)
 			return
 		}
 		newReqRes.Res = response
 		RequestResponseList = append(RequestResponseList, newReqRes)
+		RRLChannel <- 1
 
 		for key, values := range response.Header {
 			w.Header()[key] = values

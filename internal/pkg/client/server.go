@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"localprox/internal/pkg/client/websocket"
 	"localprox/internal/pkg/config"
 	"net/http"
 )
@@ -21,7 +22,7 @@ func Serve() error {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		httpHandleAssets(w, r, assets, "/")
 	})
-	mux.HandleFunc("/api/ws", handleWS)
+	mux.HandleFunc("/api/ws", websocket.HandleWS)
 
 	fmt.Printf("Starting client server on http://%v:%v\n", config.GlobalConfiguration.Client.Addr, config.GlobalConfiguration.Client.Port)
 	err = http.ListenAndServe(fmt.Sprintf("%v:%v", config.GlobalConfiguration.Client.Addr, config.GlobalConfiguration.Client.Port), mux)
